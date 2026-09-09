@@ -50,9 +50,9 @@ def generate_answer(context, question):
         print(f"[Gemini failed: {exp}] Falling back to OpenAI...")
 
         # GROQ FALLBACK
-        response = groq_client.responses.create(
+        response = groq_client.chat.completions.create(
             model="openai/gpt-oss-20b",
             messages = [{"role": "user", "content": prompt}]
         )
 
-        return response.output_text
+        return response.choices[0].message.content
