@@ -1,39 +1,35 @@
+import os 
+import fitz  
+from PIL import Image
 import pytesseract
-from pdf2image import convert_from_path
 from langchain_core.documents import Document
 
-def pdf_load_ocr(pdf_path):
-    """
-    Convert PDF pages to image and exteract text using Tesseract OCR.
-    Return a list of LangChain Document objects.
-    """
+"""Number of text wordings after which OCR will run"""
 
-    #pdf to image conversion
-    pages = convert_from_path (
-        pdf_path, 
-        dpi=300,
-        poppler_path= r"D:\poppler-26.07.0\Library\bin" )
+MIN_TEXT_CHARS = 20
+OCR_DPI = 200 #accuracy
 
-    documents = []
+def pdf_load_ocr(pdf_path: str) -> list[Document]:
+    documents: list[Document] = []
+    pdf = fitz.open(pdf_path)
 
-    for page_number, page_image in enumerate(pages, start =1 ):
+    for page_num, page in enumerate(pdf, start = 1):
+        text = page.get_text("text").strip()
 
-        #image page extract
-        text = pytesseract.image_to_string(page_image)
+        if len(text) < MIN_TEXT_CHARS:
+            pix = page.get_pixmap(dpi = OCR_DPI)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
-        if text.strip():
+            text = pytesseract.image_to_string(img).strip()
+
+
+        if text:
             documents.append(
                 Document(
-                     page_content = text,
-                    metadata = {
-                        "source": pdf_path,
-                        "page": page_number
-
-                }
+                    page_content = text,
+                    metadata = {"page": page_num, "source": os.path.basename(pdf_path)},
+                )
             )
-        ) 
-    print(f"OCr extracted text from {len(documents)}pages")
 
-    return documents 
-
-
+        pdf.close()
+        return documents
