@@ -1,29 +1,33 @@
-import os
-from os import path
-from TTS.api import TTS
+import os 
+import hashlib
+import wave
+from piper import PiperVoice
 
-tts = TTS(model_name="tts_models/en/ljspeech/vits", progress_bar = False)
+MODEL_PATH = os.environ.get("PIPER_MODEL_PATH", "model/en_US-lessac-medium.onnx")
+OUTPUT_DIR = "output_audio"
 
-def speak(text, out_path="output_audio/answer.wav"):
-    if not text or not text.strip():
-        print("[TTS] Skipped speaking — empty or blank text.")
-        return None
+_voice = None 
 
-    dir_name = os.path.dirname(out_path)
-    if dir_name:
-        os.makedirs(dir_name, exist_ok=True)
+def _get_voice() -> PiperVoice:
+    global _voice
+    if _voice is None:
+        _voice = PiperVoice.load(MODEL_PATH)
+        return _voice
 
-    try:
-        tts.tts_to_file(text=text, file_path=out_path)
-    except Exception as e:
-        print(f"[TTS] Failed to generate audio: {e}")
-        return None
+def speak(text: str,out_dir: str = OUTPUT_DIR) -> str:
 
-    return os.path.abspath(out_path)
+    if not text.strip():
+        return""
 
+    os.makedirs(out_dir, exist_ok = True)
+    text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    out_path = os.path.join(out_dir, f"{text_hash}.wav")
 
-def play_audio(file_path):
-    if os.name == "nt":
-        os.startfile(file_path)
-    else:
-        os.system(f"afplay {file_path}" if os.uname().sysname == "darwin" else f"xdg-open '{file_path}'")
+    if os.path.exists(out_path):
+        return out_path
+
+    voice = _get_voice()
+    with wave.open(out_path, "wb")as wav_file:
+        voice.synthesize(text, wav_file)
+
+        return out_path
