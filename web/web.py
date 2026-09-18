@@ -1,12 +1,20 @@
+import sys
+import os
+
+# Ensure the project root (one level up from web/) is on sys.path, since
+# `streamlit run web/web.py` only adds web/'s own folder by default —
+# without this, sibling packages like gen_ai/, narration/, etc. can't be found.
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import re
 import streamlit as st
-import os
+import hashlib
 from gen_ai.gen import generate_answer
-from coqui.tts import speak
+from narration.tts import speak
 from document_loaders.ocr import pdf_load_ocr
 from text_splitters.splitters import split_documents
 from embeddings.embeddings import get_embedding_model
-from vector_store.chroma import create_vector_store
+from vector_store.chroma import create_vector_store, load_vector_store, vector_store_exists
 from retriever.retriever import get_mmr_retriever
 
 import time
@@ -55,6 +63,12 @@ def clear_for_tts(text: str) -> str:
     return text
 
 
+def file_hash(file_bytes: bytes) -> str:
+    # used to key the embedding cache — same PDF re-uploaded skips
+    # OCR/chunking/embedding entirely
+    return hashlib.sha256(file_bytes).hexdigest()[:16]
+
+
 if "retriever" not in st.session_state:
     st.session_state.retriever = None
 if "messages" not in st.session_state:
@@ -84,31 +98,41 @@ with st.sidebar:
             st.rerun()
 
     if uploaded_file and load_clicked:
-        progress = st.progress(0, text="Reading PDF...")
-        temp_path = os.path.join("temp_uploads", uploaded_file.name)
-        os.makedirs("temp_uploads", exist_ok=True)
-        with open(temp_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
+        file_bytes = uploaded_file.getbuffer()
+        doc_hash = file_hash(bytes(file_bytes))
+        embedding_model = get_embedding_model()
 
-        progress.progress(30, text="Running OCR...")
-        with timer("OCR/Load"):
-            documents = pdf_load_ocr(temp_path)
+        if vector_store_exists(doc_hash):
+            # cache hit — same PDF seen before, skip OCR/chunk/embed
+            progress = st.progress(50, text="Found cached index — loading...")
+            with timer("Load cached vector store"):
+                vector_store = load_vector_store(embedding_model, doc_hash)
+            chunk_count = "cached"
+        else:
+            progress = st.progress(0, text="Reading PDF...")
+            temp_path = os.path.join("temp_uploads", uploaded_file.name)
+            os.makedirs("temp_uploads", exist_ok=True)
+            with open(temp_path, "wb") as f:
+                f.write(file_bytes)
 
-        progress.progress(55, text="Splitting into chunks...")
-        with timer("Split"):
-            chunks = split_documents(documents)
+            progress.progress(30, text="Running OCR...")
+            with timer("OCR/Load"):
+                documents = pdf_load_ocr(temp_path)
 
-        progress.progress(75, text="Embedding...")
-        with timer("Embed model load"):
-            embedding_model = get_embedding_model()
-        with timer("Vector store build"):
-            vector_store = create_vector_store(chunks, embedding_model)
+            progress.progress(55, text="Splitting into chunks...")
+            with timer("Split"):
+                chunks = split_documents(documents)
+
+            progress.progress(75, text="Embedding...")
+            with timer("Vector store build"):
+                vector_store = create_vector_store(chunks, embedding_model, doc_hash)
+            chunk_count = len(chunks)
 
         progress.progress(95, text="Building retriever...")
         st.session_state.retriever = get_mmr_retriever(vector_store)
         st.session_state.messages = []
         st.session_state.doc_name = uploaded_file.name
-        st.session_state.chunk_count = len(chunks)
+        st.session_state.chunk_count = chunk_count
 
         progress.progress(100, text="Done")
         st.rerun()
@@ -137,11 +161,18 @@ st.title("Good to see you!")
 if not st.session_state.doc_name:
     st.markdown("Upload a PDF from the sidebar to get started.")
 else:
-    for msg in st.session_state.messages:
+    for i, msg in enumerate(st.session_state.messages):
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
-            if msg.get("audio") and os.path.exists(msg["audio"]):
-                st.audio(msg["audio"])
+            if msg["role"] == "assistant":
+                # audio is opt-in now — nothing gets synthesized until
+                # the user actually clicks to hear it
+                if msg.get("audio") and os.path.exists(msg["audio"]):
+                    st.audio(msg["audio"])
+                elif st.button("🔊 Narrate this answer", key=f"narrate_{i}"):
+                    with st.spinner("Generating audio..."):
+                        msg["audio"] = speak(clear_for_tts(msg["content"]))
+                    st.rerun()
             if msg.get("pages"):
                 st.caption(" Sources: " + ", ".join(f"Page {p}" for p in msg["pages"]))
 
@@ -158,19 +189,26 @@ else:
                     with timer("Retrieval"):
                         docs = st.session_state.retriever.invoke(question)
                     context = "\n".join(doc.page_content for doc in docs)
-                    with timer("LLM answer"):
-                        answer = generate_answer(context, question)
-                with st.spinner("Generating audio..."):
-                    with timer("TTS"):
-                        audio_path = speak(clear_for_tts(answer))
-                pages = sorted(set(doc.metadata.get("page") for doc in docs if doc.metadata.get("page")))
 
-                st.write(answer)
-                if audio_path and os.path.exists(audio_path):
-                    st.audio(audio_path)
+                    placeholder = st.empty()
+                    answer = ""
+                    with timer("LLM answer"):
+                        try:
+                            for chunk in generate_answer(context, question, stream=True):
+                                answer += chunk
+                                placeholder.markdown(answer + "▌")
+                            placeholder.markdown(answer)
+                        except TypeError:
+                            answer = generate_answer(context, question)
+                            placeholder.markdown(answer)
+
+                pages = sorted(set(doc.metadata.get("page") for doc in docs if doc.metadata.get("page")))
                 if pages:
                     st.caption(" Sources: " + ", ".join(f"Page {p}" for p in pages))
+                # no TTS call here anymore — narration happens on-demand
+                # via the button rendered on rerun, so text shows instantly
 
             st.session_state.messages.append({
-                "role": "assistant", "content": answer, "audio": audio_path, "pages": pages
+                "role": "assistant", "content": answer, "audio": None, "pages": pages
             })
+            st.rerun()
