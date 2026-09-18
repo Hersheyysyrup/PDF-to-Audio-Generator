@@ -9,7 +9,7 @@ gemini_api_key = os.getenv("GEMINI_API_KEY")
 gemini_client = genai.Client(api_key=gemini_api_key)
 
 groq_api_key = os.getenv("GROQ_API_KEY")
-groq_client = OpenAI(api_key = groq_api_key)
+groq_client = OpenAI(api_key=groq_api_key, base_url="https://api.groq.com/openai/v1")
 
 def build_prompt (context,question):
     return f"""Use the context below to answer the user's question. The context comes from a PDF that the user is reading.
@@ -31,10 +31,19 @@ Keep the answer relevant to the user's question and the PDF's context.
     Question: {question}
     Answer:"""
 
-def generate_answer(context, question):
-
+def generate_answer(context, question, stream=False):
+    """
+    stream=False (default, unchanged behavior): returns the full answer string.
+    stream=True: returns a generator yielding text chunks as they arrive,
+    for use with st.empty()-style progressive rendering in the UI.
+    """
     prompt = build_prompt(context, question)
+ 
+    if stream:
+        return _generate_answer_stream(prompt)
+    return _generate_Answer_blocking(prompt)
 
+def _generate_Answer_blocking(prompt):
     try:
 
         # GEMINI main
@@ -56,3 +65,27 @@ def generate_answer(context, question):
         )
 
         return response.choices[0].message.content
+
+def _generate_answer_stream(prompt):
+    try:
+        # GEMINI main (streaming)
+        stream = gemini_client.models.generate_content_stream(
+            model="gemini-3.6-flash",
+            contents=prompt
+        )
+        for chunk in stream:
+            if chunk.text:
+                yield chunk.text
+ 
+    except Exception as exp:
+        print(f"[Gemini streaming failed: {exp}] Falling back to Groq...")
+ 
+        groq_stream = groq_client.chat.completions.create(
+            model="openai/gpt-oss-20b",
+            messages=[{"role": "user", "content": prompt}],
+            stream=True
+        )
+        for chunk in groq_stream:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta

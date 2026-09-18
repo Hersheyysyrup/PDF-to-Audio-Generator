@@ -13,7 +13,6 @@ env/
 
 #database and vector store
 chroma_db/
-vector_store/
 
 #temp files
 temp_uploads/
