@@ -12,7 +12,7 @@ Upload a PDF, ask questions about it, and listen to the answers. The app retriev
 
 ## How it works
 
-![Architecture](docs/architecture.png)
+![Architecture](images/architecture.png)
 
 ## Setup
 
