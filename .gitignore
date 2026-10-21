@@ -29,9 +29,6 @@ coqui/
 *.pth
 *.onnx
 
-# Images
-images/
-
 # OS files
 .DS_Store
 Thumbs.db
