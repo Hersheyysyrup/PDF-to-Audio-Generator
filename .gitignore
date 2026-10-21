@@ -1,3 +1,4 @@
+```gitignore
 __pycache__/
 *.py[cod]
 *.pyo
@@ -7,29 +8,35 @@ __pycache__/
 venv/
 env/
 
-#api keys
+# API keys
 .env
 .env.*
 
-#database and vector store
+# Database and vector store
 chroma_db/
 
-#temp files
+# Temp files
 temp_uploads/
 output_audio/
 
-#streamlit
+# Streamlit
 .agents/
 
-#model
+# Model
 coqui/
 *.bin
 *.pt
 *.pth
 *.onnx
 
+# Images
+images/
+
+# OS files
 .DS_Store
 Thumbs.db
 
+# IDEs
 .vscode/
 .idea/
+```
